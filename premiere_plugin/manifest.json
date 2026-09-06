@@ -1,0 +1,31 @@
+{
+  "short_name": "DumE",
+  "id": "com.dume.premiere-bridge",
+  "version": "0.1.0",
+  "manifestVersion": 5,
+  "name": "Dum-E Bridge",
+  "description": "Lets Dum-E (a local desktop app) read live project/sequence status from Premiere Pro. Talks over local files only -- no network access.",
+  "main": "index.html",
+  "requiredPermissions": {
+    "localFileSystem": "fullAccess"
+  },
+  "host": {
+    "app": "premierepro",
+    "minVersion": "26.0"
+  },
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#1e1e1e",
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "mainPanel",
+      "label": "Dum-E Bridge",
+      "title": "Dum-E Bridge",
+      "minimumSize": { "width": 240, "height": 120 },
+      "preferredDockedSize": { "width": 280, "height": 160 },
+      "preferredFloatingSize": { "width": 280, "height": 160 }
+    }
+  ]
+}
