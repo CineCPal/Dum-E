@@ -35,6 +35,7 @@ pub async fn get_about_info(app: AppHandle, state: State<'_, AppState>) -> Resul
         .map(|s| s.running)
         .unwrap_or(false);
     let premiere_reachable = crate::commands::premiere::premiere_reachable().await;
+    let blender_reachable = crate::commands::blender::blender_reachable().await;
 
     Ok(AboutInfo {
         app_version: app.package_info().version.to_string(),
@@ -46,5 +47,6 @@ pub async fn get_about_info(app: AppHandle, state: State<'_, AppState>) -> Resul
         searxng_reachable,
         resolve_reachable,
         premiere_reachable,
+        blender_reachable,
     })
 }

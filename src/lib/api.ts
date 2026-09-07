@@ -16,6 +16,10 @@ import type {
   PremiereImportResult,
   PremiereTimelineClip,
   PremiereRenderResult,
+  BlenderStatus,
+  BlenderSceneInfo,
+  BlenderActionResult,
+  BlenderImportResult,
 } from "./types";
 
 export const api = {
@@ -24,6 +28,10 @@ export const api = {
   askQuestion: (text: string) => invoke<ChatMessage>("ask_question", { text }),
   scoreBrollFolder: (text: string, folder: string) =>
     invoke<ChatMessage>("broll_score_folder", { text, folder }),
+  sendBrollToResolve: (text: string, count: number, timelineName: string | null) =>
+    invoke<ChatMessage>("broll_send_to_resolve", { text, count, timelineName }),
+  sendBrollToPremiere: (text: string, count: number, sequenceName: string | null) =>
+    invoke<ChatMessage>("broll_send_to_premiere", { text, count, sequenceName }),
 
   getConfig: () => invoke<AppConfig>("get_config"),
   updateConfig: (update: ConfigUpdate) => invoke<AppConfig>("update_config", { update }),
@@ -100,4 +108,10 @@ export const api = {
 
   startPremiereRender: (presetFile: string, targetDir: string, customName: string | null) =>
     invoke<PremiereRenderResult>("premiere_start_render", { presetFile, targetDir, customName }),
+
+  getBlenderStatus: () => invoke<BlenderStatus>("blender_status"),
+  getBlenderSceneInfo: () => invoke<BlenderSceneInfo | null>("blender_scene_info"),
+  addBlenderMarker: (name: string) => invoke<BlenderActionResult>("blender_add_marker", { name }),
+  importBlenderMedia: (paths: string[], sceneName: string | null) =>
+    invoke<BlenderImportResult>("blender_import_media", { paths, sceneName }),
 };

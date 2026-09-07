@@ -18,6 +18,7 @@ import { useReindex } from "@/hooks/useReindex";
 import { useRender } from "@/hooks/useRender";
 import { useResolve } from "@/hooks/useResolve";
 import { usePremiere } from "@/hooks/usePremiere";
+import { useBlender } from "@/hooks/useBlender";
 import { RESOLVE_MARKER_COLORS, PREMIERE_MARKER_COLORS } from "@/lib/types";
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -25,13 +26,16 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const { running, progress, error: reindexError, start } = useReindex();
   const resolve = useResolve();
   const premiere = usePremiere();
+  const blender = useBlender();
   const render = useRender();
   const [markerColor, setMarkerColor] = useState<string>("Blue");
   const [markerNote, setMarkerNote] = useState("");
   const [premiereMarkerColor, setPremiereMarkerColor] = useState<string>("Blue");
   const [premiereMarkerNote, setPremiereMarkerNote] = useState("");
+  const [blenderMarkerName, setBlenderMarkerName] = useState("Dum-E Marker");
   const [importTimelineName, setImportTimelineName] = useState("");
   const [premiereImportSequenceName, setPremiereImportSequenceName] = useState("");
+  const [blenderImportSceneName, setBlenderImportSceneName] = useState("");
   const [renderPreset, setRenderPreset] = useState("");
   const [renderTargetDir, setRenderTargetDir] = useState("");
   const [renderCustomName, setRenderCustomName] = useState("");
@@ -51,6 +55,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     if (!selection) return;
     const paths = Array.isArray(selection) ? selection : [selection];
     await premiere.importMedia(paths, premiereImportSequenceName);
+  };
+
+  const pickAndImportBlender = async (options: { multiple?: boolean; directory?: boolean }) => {
+    const selection = await openDialog(options);
+    if (!selection) return;
+    const paths = Array.isArray(selection) ? selection : [selection];
+    await blender.importMedia(paths, blenderImportSceneName);
   };
 
   const pickRenderTargetDir = async () => {
@@ -79,6 +90,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     if (open) {
       resolve.refresh();
       premiere.refresh();
+      blender.refresh();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -570,6 +582,87 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
             {premiere.actionMessage && <p className="text-xs text-muted-foreground">{premiere.actionMessage}</p>}
             {premiere.error && <p className="text-xs text-destructive">{premiere.error}</p>}
+          </section>
+
+          <Separator />
+
+          <section className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Blender</Label>
+                <p className="text-xs text-muted-foreground">
+                  {blender.status?.running
+                    ? `Connected — ${blender.sceneInfo?.scene_name ?? blender.status.scene_name ?? "scene"}${
+                        blender.status.file_path ? "" : " (unsaved)"
+                      }`
+                    : "Not running — install and enable the Dum-E Bridge add-on in Blender"}
+                </p>
+              </div>
+              <Button variant="secondary" onClick={blender.refresh} disabled={blender.loading}>
+                {blender.loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                Refresh
+              </Button>
+            </div>
+
+            {blender.status?.running && blender.sceneInfo && (
+              <div className="flex flex-col gap-1 rounded-md border border-border p-3 text-xs text-muted-foreground">
+                <span>
+                  Frame {blender.sceneInfo.frame_current} of {blender.sceneInfo.frame_start}–
+                  {blender.sceneInfo.frame_end} · {blender.sceneInfo.fps}fps
+                </span>
+                <span>
+                  {blender.sceneInfo.render_engine} · {blender.sceneInfo.object_count} object
+                  {blender.sceneInfo.object_count === 1 ? "" : "s"}
+                </span>
+              </div>
+            )}
+
+            {blender.status?.running && (
+              <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Adds a timeline marker at the current frame. Blender's markers have no color —
+                  just a name and a frame.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    className="flex-1"
+                    placeholder="Marker name"
+                    value={blenderMarkerName}
+                    onChange={(e) => setBlenderMarkerName(e.target.value)}
+                  />
+                  <Button variant="secondary" onClick={() => blender.addMarker(blenderMarkerName || "Dum-E Marker")}>
+                    Add marker
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {blender.status?.running && (
+              <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Imports footage into the Video Sequencer (one clip per channel, not a sequential
+                  timeline yet), and optionally builds a new scene from exactly what you pick.
+                </p>
+                <Input
+                  placeholder="New scene name (optional)"
+                  value={blenderImportSceneName}
+                  onChange={(e) => setBlenderImportSceneName(e.target.value)}
+                />
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={() => pickAndImportBlender({ multiple: true })}>
+                    <Upload className="size-4" />
+                    Add Files…
+                  </Button>
+                  <Button variant="secondary" onClick={() => pickAndImportBlender({ directory: true })}>
+                    <FolderOpen className="size-4" />
+                    Add Folder…
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {blender.actionMessage && <p className="text-xs text-muted-foreground">{blender.actionMessage}</p>}
+            {blender.error && <p className="text-xs text-destructive">{blender.error}</p>}
           </section>
         </div>
       </DialogContent>

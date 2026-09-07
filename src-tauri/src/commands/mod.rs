@@ -1,4 +1,5 @@
 pub mod about;
+pub mod blender;
 pub mod broll;
 pub mod chat;
 pub mod premiere;

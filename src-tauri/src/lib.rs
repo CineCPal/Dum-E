@@ -14,6 +14,7 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub config: RwLock<config::AppConfig>,
     pub http: reqwest::Client,
+    pub last_broll: Mutex<Option<types::LastBrollScore>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +33,7 @@ pub fn run() {
                 db: Mutex::new(conn),
                 config: RwLock::new(cfg),
                 http: reqwest::Client::new(),
+                last_broll: Mutex::new(None),
             });
 
             Ok(())
@@ -63,7 +65,13 @@ pub fn run() {
             commands::premiere::premiere_list_timeline_clips,
             commands::premiere::premiere_set_timeline_clip_enabled,
             commands::premiere::premiere_start_render,
+            commands::blender::blender_status,
+            commands::blender::blender_scene_info,
+            commands::blender::blender_add_marker,
+            commands::blender::blender_import_media,
             commands::broll::broll_score_folder,
+            commands::broll::broll_send_to_resolve,
+            commands::broll::broll_send_to_premiere,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

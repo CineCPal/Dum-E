@@ -12,8 +12,10 @@
 //! since proving the "chat text -> external tool -> chat text" pipeline
 //! was the goal of this slice, not a polished progress UI.
 
+use crate::commands::premiere::premiere_import_media;
+use crate::commands::resolve::resolve_import_media;
 use crate::db;
-use crate::types::{BrollClipResult, ChatMessage, DEFAULT_CHAT_ID};
+use crate::types::{BrollClipResult, ChatMessage, LastBrollScore, DEFAULT_CHAT_ID};
 use crate::AppState;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -168,9 +170,138 @@ pub async fn broll_score_folder(state: State<'_, AppState>, text: String, folder
     let answer = match analyzer_dir {
         None => "Set the B-Roll Analyzer path in Settings first, then try again.".to_string(),
         Some(dir) => match run_broll_bridge(&dir, &folder).await {
-            Ok(clips) => format_summary(&folder, &clips),
+            Ok(clips) => {
+                let summary = format_summary(&folder, &clips);
+                *state.last_broll.lock().map_err(|e| e.to_string())? =
+                    Some(LastBrollScore { folder: folder.clone(), clips });
+                summary
+            }
             Err(err) => format!("Couldn't score that folder: {err}"),
         },
+    };
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::insert_message(&conn, DEFAULT_CHAT_ID, "assistant", &answer, false, &[]).map_err(|e| e.to_string())
+}
+
+/// Shared by `broll_send_to_resolve`/`broll_send_to_premiere`: the
+/// `count` highest-`overall_score` clips from a scored batch, skipping any
+/// that failed to analyze.
+fn top_clips(clips: &[BrollClipResult], count: i64) -> Vec<&BrollClipResult> {
+    let mut ranked: Vec<&BrollClipResult> = clips.iter().filter(|c| c.error.is_none()).collect();
+    ranked.sort_by(|a, b| b.overall_score.partial_cmp(&a.overall_score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.into_iter().take(count.max(1) as usize).collect()
+}
+
+/// Closes the loop opened by `broll_score_folder`: takes the `count`
+/// highest-`overall_score` clips from the *last* scored folder (kept in
+/// `AppState::last_broll`, not re-scored or re-picked here) and imports
+/// them into DaVinci Resolve via `resolve_import_media` -- the exact same
+/// bridge call Settings' own "Import Footage" panel uses. Same deterministic
+/// chat-trigger philosophy as `broll_score_folder`: `useChat.ts` matches on
+/// text before this is ever called, no LLM tool-calling involved.
+#[tauri::command]
+pub async fn broll_send_to_resolve(
+    state: State<'_, AppState>,
+    text: String,
+    count: i64,
+    timeline_name: Option<String>,
+) -> Result<ChatMessage, String> {
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::insert_message(&conn, DEFAULT_CHAT_ID, "user", &text, false, &[]).map_err(|e| e.to_string())?;
+    }
+
+    let last = state.last_broll.lock().map_err(|e| e.to_string())?.clone();
+
+    let answer = match last {
+        None => {
+            "I haven't scored any b-roll yet this session -- ask me to score a folder first, \
+             then ask me to send the top clips to Resolve."
+                .to_string()
+        }
+        Some(LastBrollScore { folder, clips }) => {
+            let picked = top_clips(&clips, count);
+
+            if picked.is_empty() {
+                format!("None of the clips scored in `{folder}` analyzed cleanly enough to send.")
+            } else {
+                let paths: Vec<String> = picked.iter().map(|c| c.path.clone()).collect();
+                let name = timeline_name.or_else(|| Some("B-Roll Picks".to_string()));
+                match resolve_import_media(paths, name).await {
+                    Ok(result) if result.ok => {
+                        let mut lines = vec![format!(
+                            "Sent the top {} clip{} from `{folder}` to Resolve -- {}",
+                            picked.len(),
+                            if picked.len() == 1 { "" } else { "s" },
+                            result.message
+                        )];
+                        for clip in &picked {
+                            lines.push(format!("- **{}** — {:.0}/100", clip.filename, clip.overall_score));
+                        }
+                        lines.join("\n")
+                    }
+                    Ok(result) => format!("Resolve couldn't import those clips: {}", result.message),
+                    Err(err) => format!("Couldn't reach Resolve: {err}"),
+                }
+            }
+        }
+    };
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::insert_message(&conn, DEFAULT_CHAT_ID, "assistant", &answer, false, &[]).map_err(|e| e.to_string())
+}
+
+/// Same idea as `broll_send_to_resolve`, targeting Premiere Pro instead --
+/// imports via the UXP bridge's `premiere_import_media` (Phase 2 step 4),
+/// which mirrors `resolve_import_media`'s import+optional-sequence-creation
+/// shape exactly.
+#[tauri::command]
+pub async fn broll_send_to_premiere(
+    state: State<'_, AppState>,
+    text: String,
+    count: i64,
+    sequence_name: Option<String>,
+) -> Result<ChatMessage, String> {
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::insert_message(&conn, DEFAULT_CHAT_ID, "user", &text, false, &[]).map_err(|e| e.to_string())?;
+    }
+
+    let last = state.last_broll.lock().map_err(|e| e.to_string())?.clone();
+
+    let answer = match last {
+        None => {
+            "I haven't scored any b-roll yet this session -- ask me to score a folder first, \
+             then ask me to send the top clips to Premiere."
+                .to_string()
+        }
+        Some(LastBrollScore { folder, clips }) => {
+            let picked = top_clips(&clips, count);
+
+            if picked.is_empty() {
+                format!("None of the clips scored in `{folder}` analyzed cleanly enough to send.")
+            } else {
+                let paths: Vec<String> = picked.iter().map(|c| c.path.clone()).collect();
+                let name = sequence_name.or_else(|| Some("B-Roll Picks".to_string()));
+                match premiere_import_media(paths, name).await {
+                    Ok(result) if result.ok => {
+                        let mut lines = vec![format!(
+                            "Sent the top {} clip{} from `{folder}` to Premiere -- {}",
+                            picked.len(),
+                            if picked.len() == 1 { "" } else { "s" },
+                            result.message
+                        )];
+                        for clip in &picked {
+                            lines.push(format!("- **{}** — {:.0}/100", clip.filename, clip.overall_score));
+                        }
+                        lines.join("\n")
+                    }
+                    Ok(result) => format!("Premiere couldn't import those clips: {}", result.message),
+                    Err(err) => format!("Couldn't reach Premiere: {err}"),
+                }
+            }
+        }
     };
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;

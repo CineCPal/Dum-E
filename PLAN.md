@@ -637,8 +637,267 @@ blurry_test.mp4 — 60/100"` -- matching the standalone bridge test exactly.
 
 **Deferred**: real LLM tool-calling (v2, once this path is trusted); the
 optional CLIP "high energy" scoring (needs torch/open_clip in the bridge's
-venv); any write action back into the analysis (e.g. "send top clips to
-Resolve/Premiere" -- B-Roll Analyzer already has its own "Send to Resolve"
-using the same live-scripting-API trick `resolve_bridge.py` uses, worth
-studying before reimplementing); richer structured result rendering in
-chat (currently plain formatted text, not clip cards).
+venv); richer structured result rendering in chat (currently plain
+formatted text, not clip cards).
+
+## B-Roll -> Resolve write-back (closing the loop)
+
+**Done 2026-09-06.** The one write-back action deferred from the B-Roll
+Analyzer slice above: "send the top N clips to Resolve", reusing
+`resolve_import_media` (Phase 2 step 2) rather than reimplementing
+B-Roll Analyzer's own "Send to Resolve" trick, since Dum-E already has a
+working, verified Resolve import path.
+
+**New `AppState::last_broll`** (`Mutex<Option<LastBrollScore>>`,
+in-memory only, not persisted to `dume.db`): `broll_score_folder` stashes
+the folder + full scored clip list here on success. Resets on app
+restart -- acceptable for this slice, same discipline as the rest of
+Phase 2 -- confirmed directly during verification when a prior session's
+scored-folder chat message (from `dume.db` history) had no corresponding
+in-memory state after this session's app restart, and the new command
+correctly required a fresh `score my b-roll` first rather than acting on
+stale history.
+
+**New command `broll_send_to_resolve`** (`commands/broll.rs`): ranks
+`last_broll`'s clips by `overall_score` (skipping any with an `error`),
+takes the top `count`, and calls `resolve::resolve_import_media` directly
+as a plain Rust function call (it's already `pub`, no new bridge protocol
+needed) with a default timeline name of "B-Roll Picks". Same
+persist-as-normal-chat-turn pattern as `broll_score_folder`, including on
+failure (no prior score, nothing scored cleanly, Resolve unreachable).
+
+**Second deterministic chat trigger** in `useChat.ts`
+(`parseBrollSendToResolveRequest`): requires an explicit "resolve"
+mention plus a send verb (send/import/push/add) plus a
+b-roll/top/best/clip(s) mention, so it can never fire on a plain "score
+my b-roll" request; pulls a clip count from the first digit in the
+message, defaulting to 3. Same reasoning as the original trigger --
+not LLM tool-calling yet.
+
+**Verified end-to-end in the actual running app** (not just
+`cargo check`/`tsc`): killed the stale dev instance, relaunched
+`npm run tauri dev` fresh so the new commands were actually loaded,
+created a disposable `DumE-BRoll-Verify` project via the scripting API
+directly (same convention as every other Resolve verification in this
+log -- never through Resolve's own Project Manager UI, which has real
+production project folders like "Blair"/"Personal" sitting right next to
+it in the cloud project list). Typed "score my b-roll" -> real native
+folder picker -> `/tmp/dume_broll_resolve_test` (two fresh ffmpeg clips,
+one `gblur`-heavy) -> got back "sharp_test.mp4 — 62/100" vs.
+"blurry_test.mp4 — 56/100", correctly ranked. Then typed "send the top 2
+clips to resolve" (no folder picker this time, confirming it reused
+`last_broll` correctly) -> chat replied "Sent the top 2 clips ... Imported
+2 clip(s). Created timeline 'B-Roll Picks'." Confirmed authoritatively in
+Resolve's own Media Pool/Timeline (not just the chat's claim): a
+"B-Roll Picks" timeline existed with both clips, Video 1 showed "2 Clips",
+and the timeline preview rendered the actual SMPTE test pattern. Deleted
+the disposable test project afterward via the same scripting API.
+`cargo check` and `tsc --noEmit` both clean throughout. No bugs found --
+worked correctly on the first live attempt.
+
+**Deferred**: a "send to Resolve/Premiere" affordance that doesn't
+require remembering the exact chat phrasing (e.g. a button on the score
+result itself, once chat gets richer structured rendering).
+
+## B-Roll -> Premiere write-back (same slice, second target)
+
+**Done 2026-09-06.** Mirrors the Resolve write-back above exactly,
+targeting Premiere Pro's existing `premiere_import_media` (Phase 2 step 4)
+instead. `commands/broll.rs` gained a shared `top_clips()` helper (ranking
+logic used by both `broll_send_to_resolve` and the new
+`broll_send_to_premiere`) rather than duplicating the sort+filter+take
+logic a third time. `useChat.ts` similarly factored `parseBrollSendRequest`
+so the Resolve/Premiere variants differ only in which app-name regex they
+require ("resolve" vs. "premiere").
+
+**Environment snag, not a code bug**: Adobe UXP Developer Tools (needed to
+load the Dum-E Bridge plugin into a running Premiere for live testing)
+silently failed to launch on this machine -- `open`, launching the binary
+directly, and re-registering with `lsregister` all produced no window, no
+process, no crash report, and no log output at all. Root-caused by
+running the binary under a clean environment (`env -i ".../Adobe UXP
+Developer Tools"`), which launched it successfully -- something inherited
+from the normal shell environment was silently poisoning its Electron
+launch. Worth remembering if this recurs: `env -i` the binary directly
+rather than assuming the app itself is broken.
+
+**Verified end-to-end in the actual running apps** (not just
+`cargo check`/`tsc`): reused the existing disposable `Dum-E Test.prproj`
+(already established as this project's throwaway Premiere test project
+across prior sessions, per Phase 2 step 4's log above) rather than
+creating a new one. Loaded the Dum-E Bridge plugin via UXP Developer
+Tools' "Load" action (confirmed "Plugin Load Successful", panel showed
+"Waiting for Dum-E..." polling `/tmp/dume_premiere_bridge`). In the real
+running Dum-E app: "score my b-roll" -> real folder picker -> two fresh
+ffmpeg clips (one `gblur`-heavy) -> "sharp_test.mp4 — 62/100" vs.
+"blurry_test.mp4 — 56/100", correctly ranked. Then "send the top 2 clips
+to premiere" -> chat replied "Sent the top 2 clips ... Imported 2 clips
+and created sequence \"B-Roll Picks\"". Confirmed authoritatively in
+Premiere itself, not just the chat's claim: a new "B-Roll Picks" sequence
+tab held both clips on V1 in score order, the Program monitor rendered
+the real SMPTE test pattern, and the Dum-E Bridge panel's own log showed
+`Handled "import_media" -> {"imported_count":2,"sequence_created":true}`.
+`cargo check` and `tsc --noEmit` both clean throughout. No code bugs
+found -- worked correctly on the first live attempt once the plugin was
+loaded.
+
+**Deferred**: same as the Resolve write-back -- a chat-independent
+affordance once richer structured rendering exists; Premiere's own
+`import_media` still has no targetBin selection (always imports to
+project root, unchanged from Phase 2 step 4).
+
+## Phase 2 step 5: Blender bridge -- first slice
+
+**Done 2026-09-06.** Last unstarted piece of Phase 2's core scope. Same
+"deliberately small first slice" discipline as Resolve step 1 and
+Premiere's first slice: read-only status/scene info, plus one safe,
+easily-undoable write action (a timeline marker).
+
+**Architecture decision**: bpy is only callable from *inside* Blender's
+own embedded Python -- there's no externally-attachable scripting module
+like DaVinci Resolve ships (`DaVinciResolveScript` can be imported and
+pointed at a running instance from an outside subprocess; bpy cannot).
+That puts Blender in the same category as Premiere, not Resolve, so
+`blender_bridge/dume_bridge.py` reuses the exact same file-based
+request/response polling protocol as `premiere_plugin/index.js`
+(`request.json` -> `response-<id>.json` in a shared `/tmp` directory) --
+just driven by `bpy.app.timers.register(..., persistent=True)` instead of
+a UXP panel's `setInterval`, since `bpy.app.timers` is the supported way
+to run recurring code safely on Blender's main thread (a raw background
+thread can't touch bpy state at all).
+
+**Delivered as a real Blender add-on** (`bl_info` dict + `register()`/
+`unregister()`), not a script the user has to manually re-run every
+session -- installed once via Preferences > Add-ons > Install from Disk,
+it stays enabled across Blender restarts. This is a genuine improvement
+over Premiere's UXP plugin, which needs re-loading via UXP Developer
+Tools every session; confirmed live (see below) that Blender 5.2 LTS
+still fully supports legacy `bl_info`-style add-ons via "Install from
+Disk" despite the newer Extensions platform being the default UI.
+
+**New commands** (`blender_bridge/dume_bridge.py`): `status` (Blender
+version, open file path, active scene name), `scene_info` (frame
+range/current frame, fps, render engine, object count), `add_marker`
+(timeline marker at the current frame). **No color parameter** on the
+marker, unlike Resolve's 16 or Premiere's 7 -- Blender's
+`timeline_markers.new()` API has no color property at all, just a name
+and a frame.
+
+**Rust side** (`commands/blender.rs`) mirrors `commands/premiere.rs`'s
+`call_plugin` almost line-for-line (`call_bridge`, same
+`BRIDGE_DIR`/`POLL_INTERVAL`/`TIMEOUT`/`REACHABILITY_TIMEOUT` constants,
+same `Envelope<T> {ok, data, error}` deserialization) -- deliberately kept
+as a near-duplicate rather than a shared abstraction, since the two
+protocols reference different literal paths and are used by unrelated
+host apps; a shared helper would need a parameter for the one thing that
+differs (the path) for no real benefit at this scale.
+
+**Settings/About UI wired up**: new `useBlender` hook mirrors
+`usePremiere`'s shape (simpler -- no import/render/timeline-clip actions
+yet), a "Blender" section in Settings shows connection status + scene
+summary + the marker action, and the About modal gained a "Blender"
+status row alongside Resolve/Premiere's.
+
+**Verified end-to-end in the actual running apps** (not just
+`cargo check`/`tsc`): launched Blender 5.2.0 LTS fresh (default
+untitled scene: Camera, Cube, Light), installed `dume_bridge.py` via
+Preferences > Add-ons > Install from Disk, confirmed "Dum-E Bridge"
+appeared enabled and `/tmp/dume_blender_bridge` was created (the timer
+registered and ran). In the real running Dum-E app's Settings dialog:
+Blender section auto-loaded "Connected — Scene (unsaved)" with
+"Frame 1 of 1–250 · 24fps" / "BLENDER_EEVEE · 3 objects" (matching the
+real default scene's object count exactly), then clicking "Add marker"
+returned "Added marker \"Dum-E Marker\" at frame 1" -- confirmed
+authoritatively in Blender itself (not just the bridge's claim): the
+viewport header's breadcrumb changed to
+"Collection | Cube **\<Dum-E Marker\>**", which only happens when
+Blender's own timeline actually has that marker as the active one.
+`cargo check` and `tsc --noEmit` both clean throughout. No bugs found --
+worked correctly on the first live attempt.
+
+**A UI mechanics note worth keeping**: Settings' dialog content
+(`max-h-[85vh] overflow-y-auto`) didn't respond to Page Down or arrow
+keys for scrolling in this Tauri webview, and `cliclick` has no scroll
+command -- a synthetic scroll-wheel event posted via
+`osascript -l JavaScript` + `ObjC.import("CoreGraphics")` +
+`CGEventCreateScrollWheelEvent`/`CGEventPost` worked reliably. Worth
+reaching for directly next time a long scrollable panel needs driving,
+rather than trying window-resizing or keyboard scrolling first.
+
+**Deferred**: import/render/timeline-clip-editing parity with
+Resolve/Premiere (not attempted this slice -- bpy's data API can do all
+of this, e.g. `bpy.ops.sequencer.movie_strip_add` for importing footage
+onto the VSE, but scoping stayed deliberately small per this project's
+own established discipline); a B-Roll write-back target for Blender
+(would need an import path first); chat-triggered actions (Resolve/
+Premiere's write-backs aren't wired to Blender yet either).
+
+## Blender bridge: `import_media` (closing the import gap, and a real Blender 5.2 API bug found + fixed)
+
+**Done 2026-09-06.** Added `import_media` to the Blender bridge
+(`blender_bridge/dume_bridge.py` + `commands/blender.rs`), mirroring
+Resolve/Premiere's own `import_media`: takes a list of file paths and an
+optional new-scene name (the closest Blender equivalent to a new
+Resolve timeline or Premiere sequence, since the VSE lives on a Scene,
+not an independently addressable object). Settings UI grew an "Add
+Files…"/"Add Folder…" block for Blender identical in shape to Resolve's
+and Premiere's.
+
+**Real bug found via live multi-clip testing, not caught by a single-clip
+test**: `seq_editor.sequences` doesn't exist in Blender 5.2 -- renamed to
+`seq_editor.strips` at some point after the API was originally
+documented (confirmed live via the Scripting tab's Python console
+against the actual running Blender instance, the same rigor as every
+other bridge in this project). Fixed straightforwardly.
+
+**Second, subtler bug, only visible with 2+ clips**: the original
+sequential-placement design read each newly-created strip's
+`frame_final_end` to compute where the *next* clip should start. Single-clip
+imports worked fine, but a real two-clip import silently lost the first
+clip and then crashed on the unrelated `bpy.context.window.scene =
+scene` line with `MemoryError: couldn't create BPy_rna object` --
+confusing because the two failures look unrelated. Reproduced
+deterministically in the Python console: reading a strip's
+`frame_final_end` (or `frame_start`/`frame_final_duration` -- all three
+already carry an "expected to be removed in Blender 6.0"
+DeprecationWarning with no working non-deprecated replacement in 5.2)
+*between* two `new_movie()` calls corrupts Blender's RNA state, making
+the *next* RNA object creation fail -- including any later, ostensibly
+unrelated one in the same script run. Confirmed the fix in isolation:
+creating both strips first with zero property reads in between works
+perfectly every time; interleaving a read reproduces the crash every
+time.
+
+**Fix**: stopped trying to place clips sequentially on one track (which
+needs each clip's duration up front) and instead give each clip its own
+channel, all starting at frame 1 -- this needs no frame-property reads
+between strip creations at all, so it can't hit this bug. Documented
+in-code and in the Settings UI copy ("one clip per channel, not a
+sequential timeline yet"). Sequential single-track placement (matching
+Resolve/Premiere's actual layout) is deferred until either Blender ships
+a non-deprecated timing accessor, or clip duration can be probed some
+other way before the strip exists.
+
+**Also hit and worked around, unrelated to the above**: re-deploying the
+edited add-on required either re-running "Install from Disk" (fiddly via
+GUI automation -- the file browser's Install button and this Settings
+dialog's own file pickers both intermittently misfired on click,
+resolved each time by re-screenshotting and recomputing exact point
+coordinates rather than reusing coordinates from a previous, slightly
+different scroll position) or, more reliably, directly overwriting
+`~/Library/Application Support/Blender/5.2/scripts/addons/dume_bridge.py`
+and toggling the add-on off/on in Preferences to force Python to
+re-import it. The latter is the faster, more reliable iteration loop for
+future Blender bridge changes.
+
+**Verified end-to-end in the actual running apps, twice** (the second
+time after the fix): two real ffmpeg-generated test clips, no scene name
+(imports into the current scene) -- chat/Settings reported "Imported 2
+clips", and confirmed authoritatively via Blender's own Python console
+(not just the bridge's claim) that `bpy.data.scenes['Scene']
+.sequence_editor.strips` actually contained both `clip_a.mp4` and
+`clip_b.mp4`. `cargo check` and `tsc --noEmit` both clean throughout.
+
+**Deferred**: sequential single-track placement (see above); render/
+timeline-clip-editing parity with Resolve/Premiere; a B-Roll write-back
+target for Blender; chat-triggered actions.

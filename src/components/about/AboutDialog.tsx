@@ -93,6 +93,12 @@ export function AboutDialog({ open, onOpenChange }: { open: boolean; onOpenChang
               detail={info.premiere_reachable ? "reachable" : "not connected"}
             />
 
+            <StatusRow
+              label="Blender"
+              ok={info.blender_reachable}
+              detail={info.blender_reachable ? "reachable" : "not running"}
+            />
+
             <Separator />
 
             <StatusRow

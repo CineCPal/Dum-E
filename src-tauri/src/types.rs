@@ -20,6 +20,18 @@ pub struct BrollClipResult {
     pub error: Option<String>,
 }
 
+/// The most recent successful `broll_score_folder` result, kept in
+/// `AppState` (in-memory only, not persisted to `dume.db`) so a follow-up
+/// chat message like "send the top 3 to Resolve" has something to act on
+/// without re-scoring or re-picking a folder. Resets on app restart --
+/// acceptable for this first slice, same scoping discipline as the rest of
+/// Phase 2.
+#[derive(Debug, Clone)]
+pub struct LastBrollScore {
+    pub folder: String,
+    pub clips: Vec<BrollClipResult>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Citation {
@@ -81,6 +93,7 @@ pub struct AboutInfo {
     pub searxng_reachable: bool,
     pub resolve_reachable: bool,
     pub premiere_reachable: bool,
+    pub blender_reachable: bool,
 }
 
 /// Emitted repeatedly on the `chat://token` event while an answer streams in.
@@ -262,4 +275,50 @@ pub struct PremiereRenderResult {
     pub ok: bool,
     pub message: String,
     pub output_file: Option<String>,
+}
+
+/// Live status from the Dum-E Bridge add-on running inside Blender (see
+/// `blender_bridge/dume_bridge.py` and `commands/blender.rs`). Same
+/// file-based bridge shape as `PremiereStatus` -- `running: false` means
+/// the add-on isn't installed/enabled, or Blender isn't open, not an error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlenderStatus {
+    pub running: bool,
+    pub version: Option<String>,
+    pub file_path: Option<String>,
+    pub scene_name: Option<String>,
+}
+
+/// Scene details for the currently open .blend file -- see
+/// `blender_bridge/dume_bridge.py`'s `scene_info` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlenderSceneInfo {
+    pub scene_name: String,
+    pub frame_start: i64,
+    pub frame_end: i64,
+    pub frame_current: i64,
+    pub fps: i64,
+    pub render_engine: String,
+    pub object_count: i64,
+}
+
+/// Result of a Blender write action (currently just adding a timeline
+/// marker at the current frame) -- see `blender_bridge/dume_bridge.py`'s
+/// `add_marker` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlenderActionResult {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// Result of importing footage into Blender's VSE, and optionally building
+/// a new Scene from exactly what was imported (the closest Blender
+/// equivalent to a new Resolve timeline or Premiere sequence) -- see
+/// `blender_bridge/dume_bridge.py`'s `import_media` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlenderImportResult {
+    pub ok: bool,
+    pub message: String,
+    pub imported_count: i64,
+    pub scene_created: bool,
 }

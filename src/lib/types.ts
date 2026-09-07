@@ -34,6 +34,7 @@ export interface AboutInfo {
   searxng_reachable: boolean;
   resolve_reachable: boolean;
   premiere_reachable: boolean;
+  blender_reachable: boolean;
 }
 
 export interface AppConfig {
@@ -148,6 +149,35 @@ export interface PremiereRenderResult {
   ok: boolean;
   message: string;
   output_file: string | null;
+}
+
+export interface BlenderStatus {
+  running: boolean;
+  version: string | null;
+  file_path: string | null;
+  scene_name: string | null;
+}
+
+export interface BlenderSceneInfo {
+  scene_name: string;
+  frame_start: number;
+  frame_end: number;
+  frame_current: number;
+  fps: number;
+  render_engine: string;
+  object_count: number;
+}
+
+export interface BlenderActionResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface BlenderImportResult {
+  ok: boolean;
+  message: string;
+  imported_count: number;
+  scene_created: boolean;
 }
 
 export interface ResolveClipInfo {

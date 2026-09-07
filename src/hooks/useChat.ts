@@ -15,6 +15,29 @@ function isBrollScoreRequest(text: string): boolean {
   return mentionsBroll && mentionsScoring;
 }
 
+// Second deterministic trigger, same philosophy as isBrollScoreRequest --
+// closes the loop with the last broll_score_folder result (kept server-side
+// in AppState::last_broll) by sending the top-scored clips to an app.
+// Requires an explicit app-name mention so it never fires on a plain
+// "score my b-roll" request. Shared between the Resolve and Premiere
+// variants below -- only the app-name pattern differs.
+function parseBrollSendRequest(text: string, appPattern: RegExp): number | null {
+  const mentionsApp = appPattern.test(text);
+  const mentionsSend = /\b(send|import|push|add)\b/i.test(text);
+  const mentionsPicks = /\bb[- ]?roll\b|\btop\b|\bbest\b|\bclips?\b/i.test(text);
+  if (!mentionsApp || !mentionsSend || !mentionsPicks) return null;
+  const match = text.match(/\b(\d+)\b/);
+  return match ? parseInt(match[1], 10) : 3;
+}
+
+function parseBrollSendToResolveRequest(text: string): number | null {
+  return parseBrollSendRequest(text, /\bresolve\b/i);
+}
+
+function parseBrollSendToPremiereRequest(text: string): number | null {
+  return parseBrollSendRequest(text, /\bpremiere\b/i);
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState<string | null>(null);
@@ -68,6 +91,34 @@ export function useChat() {
           created_at: new Date().toISOString(),
         },
       ]);
+
+      const resolveSendCount = parseBrollSendToResolveRequest(trimmed);
+      if (resolveSendCount !== null) {
+        setPending(true);
+        try {
+          const reply = await api.sendBrollToResolve(trimmed, resolveSendCount, null);
+          setMessages((prev) => [...prev, reply]);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setPending(false);
+        }
+        return;
+      }
+
+      const premiereSendCount = parseBrollSendToPremiereRequest(trimmed);
+      if (premiereSendCount !== null) {
+        setPending(true);
+        try {
+          const reply = await api.sendBrollToPremiere(trimmed, premiereSendCount, null);
+          setMessages((prev) => [...prev, reply]);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setPending(false);
+        }
+        return;
+      }
 
       if (isBrollScoreRequest(trimmed)) {
         setPending(true);
